@@ -50,7 +50,7 @@ class SensorModel:
 
         # Precompute the sensor model table
         self.sensor_model_table = np.empty((self.table_width, self.table_width))
-        self.precompute_sensor_model()
+        self.precompute_sensor_model(node)
 
         # Create a simulated laser scan
         self.scan_sim = PyScanSimulator2D(
@@ -69,7 +69,7 @@ class SensorModel:
             self.map_callback,
             1)
 
-    def precompute_sensor_model(self):
+    def precompute_sensor_model(self, node):
         """
         Generate and store a table which represents the sensor model.
 
@@ -90,39 +90,84 @@ class SensorModel:
         """
         z_max = 10
         self.table_width=201
+
+        self.alpha_hit = 0.74
+        self.alpha_short = 0.07
+        self.alpha_max = 0.07
+        self.alpha_rand = 0.12
+        self.sigma_hit = 8.0
+        self.table_width = 201
+
         #Each (i, j) corresponds to the sensor model probability 
         # of measuring z=(j*z_max/200) given d=(i*z_max/200)
-        self.z = np.repeat(np.linspace(0, z_max, self.table_width).reshape(1, -1), self.table_width, axis=0)
-        self.d = np.repeat(np.linspace(0, z_max, self.table_width).reshape(-1, 1), self.table_width, axis=1)
+        self.axis = np.linspace(0, z_max, self.table_width)
+        # self.z = np.repeat(np.linspace(0, z_max, self.table_width).reshape(1, -1), self.table_width, axis=0)
+        # self.d = np.repeat(np.linspace(0, z_max, self.table_width).reshape(-1, 1), self.table_width, axis=1)
         
-        
+        # create max table
         self.max_table = np.zeros((self.table_width, self.table_width))
-        self.max_table[:, -1]=1
+        for i in range(0, self.table_width):
+            self.max_table[i, self.table_width-1] = 1
+        # self.max_table[:, -1]=1
+        node.get_logger().info(f"{self.max_table[0:5,0:5]}")
         
+        # create and normalize hit table
         self.hit_table = np.zeros((self.table_width, self.table_width))
-        self.hit_table = np.exp(-1*(self.z-self.d)**2/(2*self.sigma_hit))
-        normalizing_constants = 1/np.repeat(self.hit_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
-        self.hit_table = self.hit_table*normalizing_constants
-        
-        
-        self.rand_table = np.zeros((self.table_width, self.table_width))
-        self.rand_table = self.rand_table + 1/self.table_width
-        
-        
-        self.short_table = np.zeros((self.table_width, self.table_width))
-        #figuring out special case of what to do if d=0
-        self.short_table[0, 0]=1
-        #other rows
-        for i in range (1, self.table_width):
-            self.short_table[i, 0:i+1]=np.linspace(i, 0, i+1)
-        normalizing_constants = 1/np.repeat(self.short_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
-        self.short_table = self.short_table*normalizing_constants
+        for i in range(0, self.table_width):
+            for j in range(0, self.table_width):
+                d = self.axis[i]
+                z = self.axis[j]
+                self.hit_table[i][j] = np.exp(-1*((z-d)**2)/(2*self.sigma_hit**2))
+        # for j in range(0, self.table_width): # for each col
+        #     sum = 0
+        #     for i in range(0, self.table_width):
+        #         sum += self.hit_table[i][j]
+        #     for i in range(0, self.table_width):
+        #         self.hit_table[i][j] /= sum
 
+        # for j in range(0, self.table_width):
+        #     norm = np.sum(self.hit_table[:, j])
+        #     for i in range(0, self.table_width):
+        #         self.hit_table[i][j] /= norm
+        for i in range(0, self.table_width):
+            norm = np.sum(self.hit_table[i, :])
+            for j in range(0, self.table_width):
+                self.hit_table[i][j] /= norm
+
+        # sums = np.sum(self.hit_table, axis=0)
+        # sums = np.tile(sums, (self.table_width, 1))
+        # self.hit_table  = self.hit_table / sums
+        # normalizing_constants = 1/np.repeat(self.hit_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1) # check this
+        # self.hit_table = self.hit_table*normalizing_constants
+        node.get_logger().info(f"{self.hit_table[0:5,0:5]}")
+        
+        # create rand table
+        self.rand_table = np.zeros((self.table_width, self.table_width))
+        # self.rand_table = self.rand_table + 1/self.table_width
+        self.rand_table = self.rand_table + 1/self.z_max
+        node.get_logger().info(f"{self.rand_table[0:5,0:5]}")
+        
+        # create and normalize short table
+        self.short_table = np.zeros((self.table_width, self.table_width))
+        for i in range(0, self.table_width):
+            for j in range(0, self.table_width):
+                d = self.axis[i]
+                z = self.axis[j]
+                if (z <= d and not d == 0):
+                    self.short_table[i][j] = 2/d * (1-z/d)
+        # normalizing_constants = 1/np.repeat(self.short_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
+        # self.short_table = self.short_table*normalizing_constants
+        node.get_logger().info(f"{self.short_table[0:5,0:5]}")
 
         self.sensor_model_table = self.alpha_hit*self.hit_table + self.alpha_short*self.short_table + self.alpha_max*self.max_table + self.alpha_rand*self.rand_table
-        
-
-        raise NotImplementedError
+        # self.sensor_model_table = 1/np.repeat(self.sensor_model_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
+        # sums = np.sum(self.sensor_model_table, axis=0)
+        # sums = np.tile(sums, (self.table_width, 1))
+        # self.sensor_model_table  = self.sensor_model_table / sums
+        for j in range(0, self.table_width):
+            norm = np.sum(self.sensor_model_table[:, j])
+            for i in range(0, self.table_width):
+                self.sensor_model_table[i][j] /= norm
 
     def evaluate(self, particles, observation):
         """
@@ -164,7 +209,7 @@ class SensorModel:
                 obs = self.z_max
             elif obs < 0:
                 obs = 0
-            o = obs/(self.map.info.resolution * self.lidar_scale_to_map_scale)
+            o = obs/(self.map_metadata.resolution * self.lidar_scale_to_map_scale)
             new_observation.append(o)
 
         probabilities = []
@@ -182,6 +227,7 @@ class SensorModel:
         # Convert the map to a numpy array
         self.map = np.array(map_msg.data, np.double) / 100.
         self.map = np.clip(self.map, 0, 1)
+        self.map_metadata = map_msg.info
 
         self.resolution = map_msg.info.resolution
 
