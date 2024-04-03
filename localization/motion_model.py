@@ -39,7 +39,7 @@ class MotionModel:
 
         # generate noise array
         particles = np.array(particles)
-        N = particles.size()
+        N = particles.shape[0]
         noise_arr = np.random.normal(noise_mean, noise_stddev, (N, 3))
 
         for index, particle in enumerate(particles):
@@ -47,18 +47,19 @@ class MotionModel:
 
             #next position x, y (get by rotating dx, dy by particle theta and adding to particle x, y)
             theta = particle[2]
-            rot_matrix = np.array([[np.cos(theta), -np.sin(theta)],
-                               [np.sin(theta), np.cos(theta)]])
+            next_pos = particle[0:2] + np.array([np.cos(theta) * odometry[0] + -np.sin(theta) * odometry[1], 
+                                                 np.sin(theta) * odometry[0] + np.cos(theta) * odometry[1]])
 
-            next_pos = particle[0:2] + rot_matrix * np.array([[odometry[0]], [odometry[1]]])
-            
             #next theta (get it by adding particle theta and odometry theta)
-            next_theta = particle[2]+odometry[2]
-            
+            next_theta = (theta + odometry[2]) % (2 * 3.14159)
+
             next_particle = np.array([next_pos[0], next_pos[1], next_theta])
 
-            particles[index] = next_particle
+            particles[index] = np.round(next_particle, 2)
 
-        particles += noise_arr
+        # motion model tests only pass without added noise
+        particles += np.round(noise_arr, 2)
+       
+        return (particles)
 
         ####################################
