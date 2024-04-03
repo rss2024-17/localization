@@ -41,6 +41,8 @@ class SensorModel:
         self.table_width = 201
         ####################################
 
+        self.z_max = 10
+
         node.get_logger().info("%s" % self.map_topic)
         node.get_logger().info("%s" % self.num_beams_per_particle)
         node.get_logger().info("%s" % self.scan_theta_discretization)
@@ -86,6 +88,39 @@ class SensorModel:
         returns:
             No return type. Directly modify `self.sensor_model_table`.
         """
+        z_max = 10
+        self.table_width=201
+        #Each (i, j) corresponds to the sensor model probability 
+        # of measuring z=(j*z_max/200) given d=(i*z_max/200)
+        self.z = np.repeat(np.linspace(0, z_max, self.table_width).reshape(1, -1), self.table_width, axis=0)
+        self.d = np.repeat(np.linspace(0, z_max, self.table_width).reshape(-1, 1), self.table_width, axis=1)
+        
+        
+        self.max_table = np.zeros((self.table_width, self.table_width))
+        self.max_table[:, -1]=1
+        
+        self.hit_table = np.zeros((self.table_width, self.table_width))
+        self.hit_table = np.exp(-1*(self.z-self.d)**2/(2*self.sigma_hit))
+        normalizing_constants = 1/np.repeat(self.hit_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
+        self.hit_table = self.hit_table*normalizing_constants
+        
+        
+        self.rand_table = np.zeros((self.table_width, self.table_width))
+        self.rand_table = self.rand_table + 1/self.table_width
+        
+        
+        self.short_table = np.zeros((self.table_width, self.table_width))
+        #figuring out special case of what to do if d=0
+        self.short_table[0, 0]=1
+        #other rows
+        for i in range (1, self.table_width):
+            self.short_table[i, 0:i+1]=np.linspace(i, 0, i+1)
+        normalizing_constants = 1/np.repeat(self.short_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
+        self.short_table = self.short_table*normalizing_constants
+
+
+        self.sensor_model_table = self.alpha_hit*self.hit_table + self.alpha_short*self.short_table + self.alpha_max*self.max_table + self.alpha_rand*self.rand_table
+        
 
         raise NotImplementedError
 
@@ -121,7 +156,25 @@ class SensorModel:
         # to perform ray tracing from all the particles.
         # This produces a matrix of size N x num_beams_per_particle 
 
-        scans = self.scan_sim.scan(particles)
+        scans = self.scan_sim.scan(particles) # computes the simulated laserScan for each particle
+
+        new_observation = []
+        for obs in observation:
+            if obs > self.z_max:
+                obs = self.z_max
+            elif obs < 0:
+                obs = 0
+            o = obs/(self.map.info.resolution * self.lidar_scale_to_map_scale)
+            new_observation.append(o)
+
+        probabilities = []
+        for scan in scans:
+            probability = 1
+            for index, point in enumerate(scan):
+                probability *= self.sensor_model_table[point, new_observation[index]]
+            probabilities.append(probability)
+        
+        return probabilities
 
         ####################################
 
