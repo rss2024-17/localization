@@ -1,134 +1,256 @@
 import numpy as np
-import rclpy
+from scan_simulator_2d import PyScanSimulator2D
+# Try to change to just `from scan_simulator_2d import PyScanSimulator2D` 
+# if any error re: scan_simulator_2d occurs
+
+from tf_transformations import euler_from_quaternion
+
 from nav_msgs.msg import OccupancyGrid
-from rclpy.node import Node
 
-from localization.sensor_model import SensorModel
-from localization.test import TEST_PRECOMPUTED_TABLE, TEST_SENSOR_MODEL_OUTPUT_PROBABILITIES, \
-    TEST_SENSOR_MODEL_INPUT_SCANS, \
-    TEST_PARTICLES_2, TEST_MAP_ARRAY
+import sys
+
+np.set_printoptions(threshold=sys.maxsize)
 
 
-class Args:
-    alpha_hit = 0.74
-    alpha_short = 0.07
-    alpha_max = 0.07
-    alpha_rand = 0.12
-    sigma_hit = 8.0
-    table_width = 201
+class SensorModel:
 
-    tolerance = 0.01
+    def __init__(self, node):
+        node.declare_parameter('map_topic', "default")
+        node.declare_parameter('num_beams_per_particle', "default")
+        node.declare_parameter('scan_theta_discretization', "default")
+        node.declare_parameter('scan_field_of_view', "default")
+        node.declare_parameter('lidar_scale_to_map_scale', 1)
 
+        self.map_topic = node.get_parameter('map_topic').get_parameter_value().string_value
+        self.num_beams_per_particle = node.get_parameter('num_beams_per_particle').get_parameter_value().integer_value
+        self.scan_theta_discretization = node.get_parameter(
+            'scan_theta_discretization').get_parameter_value().double_value
+        self.scan_field_of_view = node.get_parameter('scan_field_of_view').get_parameter_value().double_value
+        self.lidar_scale_to_map_scale = node.get_parameter(
+            'lidar_scale_to_map_scale').get_parameter_value().double_value
 
-class SensorModelTest(Node):
-    def __init__(self):
-        # Hack: particle filter
-        super().__init__('particle_filter')
+        ####################################
+        # Adjust these parameters
+        self.alpha_hit = 0
+        self.alpha_short = 0
+        self.alpha_max = 0
+        self.alpha_rand = 0
+        self.sigma_hit = 0
 
-        try:
-            self.sensor_model = SensorModel(self)
-        except:
-            self.get_logger().error("Failed to initialize SensorModel :(")
-            raise ValueError
+        # Your sensor table will be a `table_width` x `table_width` np array:
+        self.table_width = 201
+        ####################################
 
-        # overwrite alphas
-        self.sensor_model.alpha_hit = Args.alpha_hit
-        self.sensor_model.alpha_short = Args.alpha_short
-        self.sensor_model.alpha_max = Args.alpha_max
-        self.sensor_model.alpha_rand = Args.alpha_rand
-        self.sensor_model.sigma_hit = Args.sigma_hit
-        self.sensor_model.table_width = Args.table_width
+        self.z_max = 10
 
-        self.tol = Args.tolerance
+        node.get_logger().info("%s" % self.map_topic)
+        node.get_logger().info("%s" % self.num_beams_per_particle)
+        node.get_logger().info("%s" % self.scan_theta_discretization)
+        node.get_logger().info("%s" % self.scan_field_of_view)
 
-        map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
+        # Precompute the sensor model table
+        self.sensor_model_table = np.empty((self.table_width, self.table_width))
+        self.precompute_sensor_model(node)
 
-        self.map_subscriber = self.create_subscription(
+        # Create a simulated laser scan
+        self.scan_sim = PyScanSimulator2D(
+            self.num_beams_per_particle,
+            self.scan_field_of_view,
+            0,  # This is not the simulator, don't add noise
+            0.01,  # This is used as an epsilon
+            self.scan_theta_discretization)
+
+        # Subscribe to the map
+        self.map = None
+        self.map_set = False
+        self.map_subscriber = node.create_subscription(
             OccupancyGrid,
-            map_topic,
-            self.map_cb,
+            self.map_topic,
+            self.map_callback,
             1)
 
-        self.num_passed = 0
+    def precompute_sensor_model(self, node):
+        """
+        Generate and store a table which represents the sensor model.
 
-    def map_cb(self, msg):
+        For each discrete computed range value, this provides the probability of 
+        measuring any (discrete) range. This table is indexed by the sensor model
+        at runtime by discretizing the measurements and computed ranges from
+        RangeLibc.
+        This table must be implemented as a numpy 2D array.
 
-        try:
-            self.sensor_model.map_callback(msg)
-        except Exception as e:
-            self.get_logger().error(f"Map callback errored out :( {e}")
+        Compute the table based on class parameters alpha_hit, alpha_short,
+        alpha_max, alpha_rand, sigma_hit, and table_width.
 
-        try:
-            self.sensor_model.precompute_sensor_model()
-        except Exception as e:
-            self.get_logger().error(f"Precompute errored out :( {e}")
+        args:
+            N/A
 
-        self.test_all()
+        returns:
+            No return type. Directly modify `self.sensor_model_table`.
+        """
+        z_max = 10
+        self.table_width=201
 
-        self.get_logger().info("Tests complete. Exiting...")
+        self.alpha_hit = 0.74
+        self.alpha_short = 0.07
+        self.alpha_max = 0.07
+        self.alpha_rand = 0.12
+        self.sigma_hit = 8.0
+        self.table_width = 201
 
-    def test_all(self):
-        try:
-            self.test_map_callback()
-            self.num_passed += 1
-        except AssertionError as e:
-            self.get_logger().error(f"Map callback test failed :( {e}")
-        except Exception as e:
-            self.get_logger().error(f"Map callback test errored out for some other reason :( {e}")
+        #Each (i, j) corresponds to the sensor model probability 
+        # of measuring z=(j*z_max/200) given d=(i*z_max/200)
+        self.axis = np.linspace(0, z_max, self.table_width)
+        # self.z = np.repeat(np.linspace(0, z_max, self.table_width).reshape(1, -1), self.table_width, axis=0)
+        # self.d = np.repeat(np.linspace(0, z_max, self.table_width).reshape(-1, 1), self.table_width, axis=1)
+        
+        # create max table
+        self.max_table = np.zeros((self.table_width, self.table_width))
+        for i in range(0, self.table_width):
+            self.max_table[i, self.table_width-1] = 1
+        # self.max_table[:, -1]=1
+        node.get_logger().info(f"{self.max_table[0:5,0:5]}")
+        
+        # create and normalize hit table
+        self.hit_table = np.zeros((self.table_width, self.table_width))
+        for i in range(0, self.table_width):
+            for j in range(0, self.table_width):
+                d = self.axis[i]
+                z = self.axis[j]
+                self.hit_table[i][j] = np.exp(-1*((z-d)**2)/(2*self.sigma_hit**2))
+        # for j in range(0, self.table_width): # for each col
+        #     sum = 0
+        #     for i in range(0, self.table_width):
+        #         sum += self.hit_table[i][j]
+        #     for i in range(0, self.table_width):
+        #         self.hit_table[i][j] /= sum
 
-        try:
-            self.test_precompute()
-            self.num_passed += 1
-        except AssertionError as e:
-            self.get_logger().error(f"Precompute test failed :( {e}")
-        except Exception as e:
-            self.get_logger().error(f"Precompute test errored out for some other reason :( {e}")
+        # for j in range(0, self.table_width):
+        #     norm = np.sum(self.hit_table[:, j])
+        #     for i in range(0, self.table_width):
+        #         self.hit_table[i][j] /= norm
+        for i in range(0, self.table_width):
+            norm = np.sum(self.hit_table[i, :])
+            for j in range(0, self.table_width):
+                self.hit_table[i][j] /= norm
 
-        try:
-            self.test_evaluate()
-            self.num_passed += 1
-        except AssertionError as e:
-            self.get_logger().error(f"Evaluate test failed :( {e}")
-        except Exception as e:
-            self.get_logger().error(f"Evaluate test errored out for some other reason :( {e}")
+        # sums = np.sum(self.hit_table, axis=0)
+        # sums = np.tile(sums, (self.table_width, 1))
+        # self.hit_table  = self.hit_table / sums
+        # normalizing_constants = 1/np.repeat(self.hit_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1) # check this
+        # self.hit_table = self.hit_table*normalizing_constants
+        node.get_logger().info(f"{self.hit_table[0:5,0:5]}")
+        
+        # create rand table
+        self.rand_table = np.zeros((self.table_width, self.table_width))
+        # self.rand_table = self.rand_table + 1/self.table_width
+        self.rand_table = self.rand_table + 1/self.z_max
+        node.get_logger().info(f"{self.rand_table[0:5,0:5]}")
+        
+        # create and normalize short table
+        self.short_table = np.zeros((self.table_width, self.table_width))
+        for i in range(0, self.table_width):
+            for j in range(0, self.table_width):
+                d = self.axis[i]
+                z = self.axis[j]
+                if (z <= d and not d == 0):
+                    self.short_table[i][j] = 2/d * (1-z/d)
+        # normalizing_constants = 1/np.repeat(self.short_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
+        # self.short_table = self.short_table*normalizing_constants
+        node.get_logger().info(f"{self.short_table[0:5,0:5]}")
 
-        if self.num_passed == 3:
-            self.get_logger().info("All tests passed :)")
+        self.sensor_model_table = self.alpha_hit*self.hit_table + self.alpha_short*self.short_table + self.alpha_max*self.max_table + self.alpha_rand*self.rand_table
+        # self.sensor_model_table = 1/np.repeat(self.sensor_model_table.sum(axis=-1).reshape(-1, 1), self.table_width, axis=1)
+        # sums = np.sum(self.sensor_model_table, axis=0)
+        # sums = np.tile(sums, (self.table_width, 1))
+        # self.sensor_model_table  = self.sensor_model_table / sums
+        for j in range(0, self.table_width):
+            norm = np.sum(self.sensor_model_table[:, j])
+            for i in range(0, self.table_width):
+                self.sensor_model_table[i][j] /= norm
 
-    def test_precompute(self):
-        expected = np.array(TEST_PRECOMPUTED_TABLE)
-        actual = self.sensor_model.sensor_model_table
+    def evaluate(self, particles, observation):
+        """
+        Evaluate how likely each particle is given
+        the observed scan.
 
-        assert actual.shape == expected.shape, f"Wrong shape of the precomputed table. Expected {expected.shape}, got {actual.shape}"
+        args:
+            particles: An Nx3 matrix of the form:
 
-        assert np.allclose(actual, expected,
-                           atol=self.tol), f"Wrong values in the precomputed table. First row: {actual[0, :]}, expected {expected[0, :]}"
+                [x0 y0 theta0]
+                [x1 y0 theta1]
+                [    ...     ]
 
-        self.get_logger().info("Precompute test passed :)")
+            observation: A vector of lidar data measured
+                from the actual lidar. THIS IS Z_K. Each range in Z_K is Z_K^i
 
-    def test_evaluate(self):
-        expected_probabilities = np.array(TEST_SENSOR_MODEL_OUTPUT_PROBABILITIES)
-        actual_probabilities = self.sensor_model.evaluate(
-            np.array(TEST_PARTICLES_2), np.array(TEST_SENSOR_MODEL_INPUT_SCANS))
+        returns:
+           probabilities: A vector of length N representing
+               the probability of each particle existing
+               given the observation and the map.
+        """
 
-        assert np.allclose(expected_probabilities,
-                           actual_probabilities,
-                           rtol=self.tol), f"Expected {expected_probabilities}, got {actual_probabilities}"
+        if not self.map_set:
+            return
 
-        self.get_logger().info("Evaluate test passed :)")
+        ####################################
+        # TODO
+        # Evaluate the sensor model here!
+        #
+        # You will probably want to use this function
+        # to perform ray tracing from all the particles.
+        # This produces a matrix of size N x num_beams_per_particle 
 
-    def test_map_callback(self):
-        expected_map = np.array(TEST_MAP_ARRAY)
-        actual_map = self.sensor_model.map
+        scans = self.scan_sim.scan(particles) # computes the simulated laserScan for each particle
 
-        assert np.allclose(expected_map, actual_map, atol=self.tol), "Map does not match exactly"
+        new_observation = []
+        for obs in observation:
+            if obs > self.z_max:
+                obs = self.z_max
+            elif obs < 0:
+                obs = 0
+            o = obs/(self.map_metadata.resolution * self.lidar_scale_to_map_scale)
+            new_observation.append(o)
 
-        self.get_logger().info("Map callback test passed :)")
+        probabilities = []
+        for scan in scans:
+            probability = 1
+            for index, point in enumerate(scan):
+                probability *= self.sensor_model_table[point, new_observation[index]]
+            probabilities.append(probability)
+        
+        return probabilities
 
+        ####################################
 
-def main(args=None):
-    rclpy.init(args=args)
-    pf = SensorModelTest()
-    pf.get_logger().info("Waiting for map, please run localization.test_map.launch.xml in a few seconds...")
-    rclpy.spin(pf)
-    rclpy.shutdown()
+    def map_callback(self, map_msg):
+        # Convert the map to a numpy array
+        self.map = np.array(map_msg.data, np.double) / 100.
+        self.map = np.clip(self.map, 0, 1)
+        self.map_metadata = map_msg.info
+
+        self.resolution = map_msg.info.resolution
+
+        # Convert the origin to a tuple
+        origin_p = map_msg.info.origin.position
+        origin_o = map_msg.info.origin.orientation
+        origin_o = euler_from_quaternion((
+            origin_o.x,
+            origin_o.y,
+            origin_o.z,
+            origin_o.w))
+        origin = (origin_p.x, origin_p.y, origin_o[2])
+
+        # Initialize a map with the laser scan
+        self.scan_sim.set_map(
+            self.map,
+            map_msg.info.height,
+            map_msg.info.width,
+            map_msg.info.resolution,
+            origin,
+            0.5)  # Consider anything < 0.5 to be free
+
+        # Make the map set
+        self.map_set = True
+
+        print("Map initialized")
