@@ -102,7 +102,7 @@ class SensorModelTest(Node):
         assert actual.shape == expected.shape, f"Wrong shape of the precomputed table. Expected {expected.shape}, got {actual.shape}"
 
         assert np.allclose(actual, expected,
-                           atol=self.tol), f"Wrong values in the precomputed table. First row: {actual[0, :]}, expected {expected[0, :]}"
+                           atol=self.tol), f"Wrong values in the precomputed table. First row: \n{actual[0:5, 0:5]}, expected \n{expected[0:5, 0:5]}"
 
         self.get_logger().info("Precompute test passed :)")
 

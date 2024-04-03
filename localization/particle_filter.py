@@ -6,6 +6,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 
 from rclpy.node import Node
 import rclpy
+import threading
 
 assert rclpy
 
@@ -13,6 +14,7 @@ import numpy as np
 
 # import laserscan message
 from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import PointStamped
 
 class ParticleFilter(Node):
 
@@ -62,6 +64,7 @@ class ParticleFilter(Node):
         #     "/map" frame.
 
         self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
+        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/base_link_pf", 1) ## should be /base_link on car
 
         # Initialize the models
         self.motion_model = MotionModel(self)
@@ -83,61 +86,87 @@ class ParticleFilter(Node):
         self.laserScan = None
 
         # TODO: add a way to initialize these with a ui
-        self.num_particles = self.get_parameter("num_particles").get_parameter_value().string_value
-        self.particles = np.random((self.num_particles, )) # todo this
+        # self.num_particles = self.get_parameter("num_particles").get_parameter_value().string_value
+        self.num_particles = 200
+
+        self.clicked_point = (0, 0)
+        # set self.clicked_point to the point clicked in rviz
+        # self.clicked_point = (x, y
+        subscription = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
+                    
+        self.particles = np.zeros((self.num_particles, 3)) # todo this with the clicking
         # but anyway particles is of shape (num_particles, 3)
 
         self.num_beams_per_particle = self.get_parameter("num_beams_per_particle").get_parameter_value().string_value
+    
+        self._lock = threading.Lock()
+
+    # msg_click of type PointStamped
+    def click_callback(self, msg_click):
+        x = msg_click.point.x
+        y = msg_click.point.y
+        self.get_logger().info("%d %d\n" % (x, y))
+
+        self.particles[:, 0] = np.random.normal(x, 1.0, (self.num_particles,))
+        self.particles[:, 1] = np.random.normal(y, 1.0, (self.num_particles,))
+        self.particles[:, 2] = np.random.uniform(0, 2*np.pi, (self.num_particles,))
+        self.get_logger().info(f"{self.particles}\n")
 
 # takes in param LaserScan
-def laser_callback(self, msg_laser):
-    # https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/LaserScan.html
-    self.laserScan = msg_laser
+    def laser_callback(self, msg_laser):
+        # https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/LaserScan.html
 
-    # update and correct 
-    ranges = np.array(self.laserScan.ranges)
-    laser_linspaced = ranges[np.linspace(0, ranges.size()-1, num=self.num_beams_per_particle, dtype = int)]
+        self._lock.acquire()
+        self.laserScan = msg_laser
 
-    probabilities = self.sensor_model.evaluate(self.particles, laser_linspaced) 
+        # update and correct 
+        ranges = np.array(self.laserScan.ranges)
+        laser_linspaced = ranges[np.linspace(0, ranges.size()-1, num=self.num_beams_per_particle, dtype = int)]
 
-    # resample particles from previous particles using probabilities
-    self.particles = np.random.choice(self.particles, self.num_particles, p=probabilities, replaced=False)
-    # could change to a different resampling method, but use this for now
+        
+        probabilities = self.sensor_model.evaluate(self.particles, laser_linspaced) 
 
-    updatePoseGuess()
+        # resample particles from previous particles using probabilities
+        self.particles = np.random.choice(self.particles, self.num_particles, p=probabilities, replaced=False)
+        # could change to a different resampling method, but use this for now
 
-# takes in param Odometry
-def odom_callback(self, odom):
-    # https://docs.ros2.org/foxy/api/nav_msgs/msg/Odometry.html
+        updatePoseGuess(self)
 
-    if (self.laserScan == None): return # break out of function if no laser scans received yet
+        self._lock.release()
 
-    twist = odom.twist.twist
-    twist_x = twist.linear.x
-    twist_y = twist.linear.y
-    twist_theta = twist.angular.z
-    
-    self.particles = self.motion_model.evaluate(self.particles, np.array([twist_x, twist_y, twist_theta]))
+    # takes in param Odometry
+    def odom_callback(self, odom):
+        # https://docs.ros2.org/foxy/api/nav_msgs/msg/Odometry.html
+        self._lock.acquire()
 
-    updatePoseGuess(self)
+        if (self.laserScan == None): return # break out of function if no laser scans received yet
 
-def updatePoseGuess(self):
-    # set pose to average of particles
+        twist = odom.twist.twist
+        twist_x = twist.linear.x
+        twist_y = twist.linear.y
+        twist_theta = twist.angular.z
+        
+        self.particles = self.motion_model.evaluate(self.particles, np.array([twist_x, twist_y, twist_theta]))
 
-    # TODO
-    # for theta in self.particles[:, 2]:  https://en.wikipedia.org/wiki/Circular_mean
-    #     if abs(theta) > np.pi/2:
+        updatePoseGuess(self)
 
-    self.pose = np.array(np.mean(self.particles[0]), np.mean(self.particles[1]), np.mean(self.particles[2]))
+        self._lock.release()
 
-# takes in param PoseWithCovarianceStamped
-# override callback to set pose manually
-def pose_callback(self, update_pose):
-    # https://docs.ros2.org/latest/api/geometry_msgs/msg/PoseWithCovarianceStamped.html
-    update_pose_point = update_pose.pose.pose.position
-    self.pose[0] = update_pose_point.x
-    self.pose[1] = update_pose_point.y
-    self.pose[2] = update_pose_point.z
+    def updatePoseGuess(self):
+        # set pose to average of particles    
+        
+        # README HAS A COMMENT ABOUT A BETTER WAY TO FIND AVERAGES... especially if position has many modes in distribution
+        self.pose = np.array(np.mean(self.particles[0]), np.mean(self.particles[1]),  np.arctan2(np.mean(np.sin(self.particle[2])), np.mean(np.cos(self.particle[2]))))
+        self.pose_pu.publish(self.pose)
+
+    # takes in param PoseWithCovarianceStamped
+    # override callback to set pose manually
+    def pose_callback(self, update_pose):
+        # https://docs.ros2.org/latest/api/geometry_msgs/msg/PoseWithCovarianceStamped.html
+        update_pose_point = update_pose.pose.pose.position
+        self.pose[0] = update_pose_point.x
+        self.pose[1] = update_pose_point.y
+        self.pose[2] = update_pose_point.z
 
 def main(args=None):
     rclpy.init(args=args)
