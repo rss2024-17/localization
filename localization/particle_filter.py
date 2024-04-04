@@ -165,30 +165,35 @@ class ParticleFilter(Node):
         # https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/LaserScan.html
 
         return
-
-        self._lock.acquire()
+         
+        # self._lock.acquire()
         self.laserScan = msg_laser
 
         # update and correct 
         ranges = np.array(self.laserScan.ranges)
-        laser_linspaced = ranges[np.linspace(0, ranges.size()-1, num=self.num_beams_per_particle, dtype = int)]
+        self.num_beams_per_particle = 100
+        laser_linspaced = ranges[np.linspace(0, ranges.size-1, int(self.num_beams_per_particle), dtype = int)]
         
         probabilities = self.sensor_model.evaluate(self.particles, laser_linspaced) 
 
-        # resample particles from previous particles using probabilities
-        self.particles = np.random.choice(self.particles, self.num_particles, p=probabilities, replaced=False)
+        # resample particles from previous particles using probabilities (choice only takes in 1D array)
+        indicies_particles = np.linspace(0, self.particles.shape[0]-1, self.particles.shape[0])
+        # self.particles = np.random.choice(self.particles, self.num_particles, p=probabilities, replace=False)
+        chosen_indicies = np.random.choice(indicies_particles, self.num_particles, p=probabilities, replace=False)
+        for i in chosen_indicies:
+            np.append(self.particles, self.particles[int(i),:])
         # could change to a different resampling method, but use this for now
 
-        self.updatePoseGuess(self)
+        self.updatePoseGuess()
 
-        self._lock.release()
+        # self._lock.release()
 
     # takes in param Odometry
     def odom_callback(self, odom):
         # https://docs.ros2.org/foxy/api/nav_msgs/msg/Odometry.html
-        return 
-    
-        self._lock.acquire()
+      
+        return
+        # self._lock.acquire()
 
         if (self.laserScan == None): return # break out of function if no laser scans received yet
 
@@ -199,16 +204,32 @@ class ParticleFilter(Node):
         
         self.particles = self.motion_model.evaluate(self.particles, np.array([twist_x, twist_y, twist_theta]))
 
-        self.updatePoseGuess(self)
+        self.updatePoseGuess()
 
-        self._lock.release()
+        # self._lock.release()
 
     def updatePoseGuess(self):
         # set pose to average of particles    
         
         # README HAS A COMMENT ABOUT A BETTER WAY TO FIND AVERAGES... especially if position has many modes in distribution
-        self.pose = np.array(np.mean(self.particles[0]), np.mean(self.particles[1]),  np.arctan2(np.mean(np.sin(self.particle[2])), np.mean(np.cos(self.particle[2]))))
-        self.pose_pu.publish(self.pose)
+        self.pose = np.array([np.mean(self.particles[0]), np.mean(self.particles[1]),  np.arctan2(np.mean(np.sin(self.particles[2])), np.mean(np.cos(self.particles[2])))])
+        print(self.pose)
+        pose_toPub = PoseWithCovarianceStamped()
+
+        pose_toPub.pose.pose.position.x = self.pose[0]
+        pose_toPub.pose.pose.position.y = self.pose[1]
+        pose_toPub.pose.pose.position.z = 0.0
+
+        quat = self.euler_to_quaternion(0,0,self.pose[2])
+
+        # set rotation
+        pose_toPub.pose.pose.orientation.w = quat[0]
+        pose_toPub.pose.pose.orientation.x = quat[1]
+        pose_toPub.pose.pose.orientation.y = quat[2]
+        pose_toPub.pose.pose.orientation.z = quat[3]
+
+        
+        self.pose_pub.publish(pose_toPub)
 
     # takes in param PoseWithCovarianceStamped
     # override callback to set pose manually
