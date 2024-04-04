@@ -14,6 +14,8 @@ import numpy as np
 
 # import laserscan message
 from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import PoseArray
+from geometry_msgs.msg import Pose
 from geometry_msgs.msg import PointStamped
 
 class ParticleFilter(Node):
@@ -66,6 +68,8 @@ class ParticleFilter(Node):
         self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
         self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/base_link_pf", 1) ## should be /base_link on car
 
+        self.particles_pub = self.create_publisher(PoseArray, "/particles_vis", 1) # allows us to visualize particles
+
         # Initialize the models
         self.motion_model = MotionModel(self)
         self.sensor_model = SensorModel(self)
@@ -92,29 +96,75 @@ class ParticleFilter(Node):
         self.clicked_point = (0, 0)
         # set self.clicked_point to the point clicked in rviz
         # self.clicked_point = (x, y
-        subscription = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
+        self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
                     
         self.particles = np.zeros((self.num_particles, 3)) # todo this with the clicking
-        # but anyway particles is of shape (num_particles, 3)
 
         self.num_beams_per_particle = self.get_parameter("num_beams_per_particle").get_parameter_value().string_value
     
-        self._lock = threading.Lock()
+        # self._lock = threading.Lock()
 
     # msg_click of type PointStamped
     def click_callback(self, msg_click):
         x = msg_click.point.x
         y = msg_click.point.y
-        self.get_logger().info("%d %d\n" % (x, y))
+        self.get_logger().info("Point clicked at %d %d" % (x, y))
 
         self.particles[:, 0] = np.random.normal(x, 1.0, (self.num_particles,))
         self.particles[:, 1] = np.random.normal(y, 1.0, (self.num_particles,))
         self.particles[:, 2] = np.random.uniform(0, 2*np.pi, (self.num_particles,))
-        self.get_logger().info(f"{self.particles}\n")
+
+        self.get_logger().info("Created new Gaussian particles")
+        self.update_particles_viz()
+    
+    def update_particles_viz(self):
+        posearray = PoseArray()
+        posearray.header.frame_id = "/map"
+        for particle in self.particles:
+            pose = Pose()
+
+            # set position
+            pose.position.x = particle[0]
+            pose.position.y = particle[1]
+            pose.position.z = 0.0
+
+            quat = self.euler_to_quaternion(0,0,particle[2])
+
+            # set rotation
+            pose.orientation.w = quat[0]
+            pose.orientation.x = quat[1]
+            pose.orientation.y = quat[2]
+            pose.orientation.z = quat[3] # unsure if this works tbh
+
+            posearray.poses.append(pose)
+
+        self.particles_pub.publish(posearray)
+
+        self.get_logger().info("Published particles viz")
+
+    # returns quaternion for a rotation given in euler angles
+    # i got this online
+    def euler_to_quaternion(self,roll, pitch, yaw):
+
+        cr = np.cos(roll * 0.5)
+        sr = np.sin(roll * 0.5)
+        cp = np.cos(pitch * 0.5)
+        sp = np.sin(pitch * 0.5)
+        cy = np.cos(yaw * 0.5)
+        sy = np.sin(yaw * 0.5)
+
+        w = cr * cp * cy + sr * sp * sy
+        x = sr * cp * cy - cr * sp * sy
+        y = cr * sp * cy + sr * cp * sy
+        z = cr * cp * sy - sr * sp * cy
+
+        return [w,x,y,z]
 
 # takes in param LaserScan
     def laser_callback(self, msg_laser):
         # https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/LaserScan.html
+
+        return
 
         self._lock.acquire()
         self.laserScan = msg_laser
@@ -122,7 +172,6 @@ class ParticleFilter(Node):
         # update and correct 
         ranges = np.array(self.laserScan.ranges)
         laser_linspaced = ranges[np.linspace(0, ranges.size()-1, num=self.num_beams_per_particle, dtype = int)]
-
         
         probabilities = self.sensor_model.evaluate(self.particles, laser_linspaced) 
 
@@ -130,13 +179,15 @@ class ParticleFilter(Node):
         self.particles = np.random.choice(self.particles, self.num_particles, p=probabilities, replaced=False)
         # could change to a different resampling method, but use this for now
 
-        updatePoseGuess(self)
+        self.updatePoseGuess(self)
 
         self._lock.release()
 
     # takes in param Odometry
     def odom_callback(self, odom):
         # https://docs.ros2.org/foxy/api/nav_msgs/msg/Odometry.html
+        return 
+    
         self._lock.acquire()
 
         if (self.laserScan == None): return # break out of function if no laser scans received yet
@@ -148,7 +199,7 @@ class ParticleFilter(Node):
         
         self.particles = self.motion_model.evaluate(self.particles, np.array([twist_x, twist_y, twist_theta]))
 
-        updatePoseGuess(self)
+        self.updatePoseGuess(self)
 
         self._lock.release()
 
