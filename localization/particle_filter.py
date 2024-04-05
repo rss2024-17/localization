@@ -163,10 +163,10 @@ class ParticleFilter(Node):
 # takes in param LaserScan
     def laser_callback(self, msg_laser):
         # https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/LaserScan.html
-
-        return
          
         # self._lock.acquire()
+
+        self.get_logger().info("Laser Callback")
         self.laserScan = msg_laser
 
         # update and correct 
@@ -194,6 +194,7 @@ class ParticleFilter(Node):
       
         return
         # self._lock.acquire()
+        self.get_logger().info("Odom Callback")
 
         if (self.laserScan == None): return # break out of function if no laser scans received yet
 
@@ -210,7 +211,8 @@ class ParticleFilter(Node):
 
     def updatePoseGuess(self):
         # set pose to average of particles    
-        
+
+        self.get_logger().info("Updated Pose")
         # README HAS A COMMENT ABOUT A BETTER WAY TO FIND AVERAGES... especially if position has many modes in distribution
         self.pose = np.array([np.mean(self.particles[0]), np.mean(self.particles[1]),  np.arctan2(np.mean(np.sin(self.particles[2])), np.mean(np.cos(self.particles[2])))])
         print(self.pose)
@@ -228,12 +230,13 @@ class ParticleFilter(Node):
         pose_toPub.pose.pose.orientation.y = quat[2]
         pose_toPub.pose.pose.orientation.z = quat[3]
 
-        
+        self.update_particles_viz()
         self.pose_pub.publish(pose_toPub)
 
     # takes in param PoseWithCovarianceStamped
     # override callback to set pose manually
     def pose_callback(self, update_pose):
+        self.get_logger().info("Pose Callback")
         # https://docs.ros2.org/latest/api/geometry_msgs/msg/PoseWithCovarianceStamped.html
         update_pose_point = update_pose.pose.pose.position
         self.pose[0] = update_pose_point.x
