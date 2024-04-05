@@ -8,6 +8,7 @@ from tf_transformations import euler_from_quaternion
 from nav_msgs.msg import OccupancyGrid
 
 import sys
+import math
 
 np.set_printoptions(threshold=sys.maxsize)
 
@@ -16,10 +17,13 @@ class SensorModel:
 
     def __init__(self, node):
         node.declare_parameter('map_topic', "default")
-        node.declare_parameter('num_beams_per_particle', "default")
         node.declare_parameter('scan_theta_discretization', "default")
         node.declare_parameter('scan_field_of_view', "default")
         node.declare_parameter('lidar_scale_to_map_scale', 1)
+
+        # comment the line below in if running sensor_model by itself
+        # leave it commented out if running sensor_model from particle_Filter
+        # node.declare_parameter('num_beams_per_particle', "default")
 
         self.map_topic = node.get_parameter('map_topic').get_parameter_value().string_value
         self.num_beams_per_particle = node.get_parameter('num_beams_per_particle').get_parameter_value().integer_value
@@ -31,22 +35,17 @@ class SensorModel:
 
         ####################################
         # Adjust these parameters
-        self.alpha_hit = 0
-        self.alpha_short = 0
-        self.alpha_max = 0
-        self.alpha_rand = 0
-        self.sigma_hit = 0
+        self.alpha_hit = 0.74
+        self.alpha_short = 0.07
+        self.alpha_max = 0.07
+        self.alpha_rand = 0.12
+        self.sigma_hit = 8.0
 
         # Your sensor table will be a `table_width` x `table_width` np array:
         self.table_width = 201
         ####################################
 
-        self.z_max = 200
-
-        node.get_logger().info("%s" % self.map_topic)
-        node.get_logger().info("%s" % self.num_beams_per_particle)
-        node.get_logger().info("%s" % self.scan_theta_discretization)
-        node.get_logger().info("%s" % self.scan_field_of_view)
+        self.z_max = 201 # may need to tweak this value
 
         # Precompute the sensor model table
         self.sensor_model_table = np.empty((self.table_width, self.table_width))
@@ -90,12 +89,6 @@ class SensorModel:
         returns:
             No return type. Directly modify `self.sensor_model_table`.
         """
-        self.alpha_hit = 0.74
-        self.alpha_short = 0.07
-        self.alpha_max = 0.07
-        self.alpha_rand = 0.12
-        self.sigma_hit = 8.0
-        self.table_width=201
         #Each (i, j) corresponds to the sensor model probability 
         # of measuring z=(j*z_max/200) given d=(i*z_max/200)
         self.z = np.repeat(np.linspace(0, self.z_max, self.table_width).reshape(1, -1), self.table_width, axis=0)
@@ -147,36 +140,33 @@ class SensorModel:
         """
 
         if not self.map_set:
+            self.node.get_logger().info("MAP NOT SET!")
             return
 
-        ####################################
-        # TODO
-        # Evaluate the sensor model here!
-        #
-        # You will probably want to use this function
-        # to perform ray tracing from all the particles.
-        # This produces a matrix of size N x num_beams_per_particle 
-
+        # Performs ray tracing from all of the particles
+        # Produces a matrix of size N x num_beams_per_particle
         scans = self.scan_sim.scan(particles) # computes the simulated laserScan for each particle
         
-        #clip each element of obs between 0 and self.z_max
-        observation = np.clip(observation, 0, self.z_max)
+        # convert from meters to pixels
         observation = observation / (self.map_metadata.resolution * self.lidar_scale_to_map_scale)
+        scans = scans / (self.map_metadata.resolution * self.lidar_scale_to_map_scale)
+
+        # clip to z_max
+        observation = np.clip(observation, 0, self.z_max)
+        observation = observation/self.z_max * (self.table_width-1)
+
+        scans = np.clip(scans, 0, self.z_max)
+        scans = scans/self.z_max * (self.table_width-1)
 
         probabilities = np.zeros(scans.shape[0])
         
         # calculates p(z_k^i | x_k^j, m) across all lidar readings for each particle's scan
         for scan_index, particle_scan in enumerate(scans):
             individual_lidar_probs= np.take(self.sensor_model_table, np.ravel_multi_index((observation.astype(int), particle_scan.astype(int)), self.sensor_model_table.shape))
-            # multiplied invidiual_lidar_probs
+            # multiplied individual_lidar_probs
             probabilities[scan_index] = np.exp(np.log(individual_lidar_probs).sum())
-        
-        # self.node.get_logger().info("probabilities done")
-        # self.node.get_logger().info("%d\n" % probabilities.shape[0])
 
         return probabilities
-
-        ####################################
 
     def map_callback(self, map_msg):
         # Convert the map to a numpy array
