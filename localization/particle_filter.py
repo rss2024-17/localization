@@ -16,6 +16,7 @@ import numpy as np
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseArray
 from geometry_msgs.msg import Pose
+from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import PointStamped
 
 class ParticleFilter(Node):
@@ -80,7 +81,8 @@ class ParticleFilter(Node):
         #     "/map" frame.
 
         self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
-        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/base_link", 1) ## should be /base_link on car
+        self.pose_pub = self.create_publisher(PoseStamped, "/base_link", 1) ## should be /base_link on car
+        #self.laser_pose_pub = self.create_publisher(PoseStamped, "/laser", 1)
 
         # Publisher for us to visualize our particles
         self.particles_pub = self.create_publisher(PoseArray, "/particles_vis", 1)
@@ -212,21 +214,28 @@ class ParticleFilter(Node):
 
         # README HAS A COMMENT ABOUT A BETTER WAY TO FIND AVERAGES... especially if position has many modes in distribution
         self.pose = np.array([np.mean(self.particles[0]), np.mean(self.particles[1]),  np.arctan2(np.mean(np.sin(self.particles[2])), np.mean(np.cos(self.particles[2])))])
-        pose_toPub = PoseWithCovarianceStamped()
+        pose_toPub = PoseStamped()
 
-        pose_toPub.pose.pose.position.x = self.pose[0]
-        pose_toPub.pose.pose.position.y = self.pose[1]
-        pose_toPub.pose.pose.position.z = 0.0
+        pose_toPub.header.frame_id = "/map"
+        pose_toPub.pose.position.x = self.pose[0]
+        pose_toPub.pose.position.y = self.pose[1]
+        pose_toPub.pose.position.z = 0.0
 
         quat = euler_to_quaternion(0,0,self.pose[2])
 
         # set rotation
-        pose_toPub.pose.pose.orientation.w = quat[0]
-        pose_toPub.pose.pose.orientation.x = quat[1]
-        pose_toPub.pose.pose.orientation.y = quat[2]
-        pose_toPub.pose.pose.orientation.z = quat[3]
+        pose_toPub.pose.orientation.w = quat[0]
+        pose_toPub.pose.orientation.x = quat[1]
+        pose_toPub.pose.orientation.y = quat[2]
+        pose_toPub.pose.orientation.z = quat[3]
 
         self.pose_pub.publish(pose_toPub)
+        #laser_pose_toPub = PoseStamped()
+        #laser_pose_toPub.header.frame_id = "/map"
+        #laser_pose_toPub.pose.position.x = 0.0
+        #laser_pose_toPub.pose.position.y = 0.0
+        #laser_pose_toPub.pose.position.z = 0.0
+        #self.laser_pose_pub.publish(pose_toPub)
 
         # self.get_logger().info("Updated pose guess!")
 
