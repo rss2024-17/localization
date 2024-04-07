@@ -29,7 +29,7 @@ class ParticleFilter(Node):
         self.get_logger().info("INITIALIZING PARTICLE FILTER")
         
         # declare and retrieve our parameters
-        self.declare_parameter('odom_topic', "/odom")
+        self.declare_parameter('odom_topic', "/vesc/odom")
         self.declare_parameter('scan_topic', "/scan")
         self.declare_parameter('num_particles', "default")
         self.declare_parameter('num_beams_per_particle', "default")
@@ -80,7 +80,7 @@ class ParticleFilter(Node):
         #     "/map" frame.
 
         self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
-        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/base_link_pf", 1) ## should be /base_link on car
+        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/base_link", 1) ## should be /base_link on car
 
         # Publisher for us to visualize our particles
         self.particles_pub = self.create_publisher(PoseArray, "/particles_vis", 1)
@@ -187,8 +187,8 @@ class ParticleFilter(Node):
         # self._lock.acquire()
 
         if (self.laserScan == None): return # break out of function if no laser scans received yet
-        self.twist_x = odom.twist.twist.linear.x
-        self.twist_y = odom.twist.twist.linear.y
+        self.twist_x = -odom.twist.twist.linear.x
+        self.twist_y = -odom.twist.twist.linear.y
         self.twist_theta = odom.twist.twist.angular.z
 
         # self._lock.release()
