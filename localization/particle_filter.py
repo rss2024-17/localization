@@ -122,9 +122,14 @@ class ParticleFilter(Node):
         self.generate_random_particles(x,y)
     
     def generate_random_particles(self, x, y):
-        self.particles[:, 0] = np.random.normal(x, 1.0, (self.num_particles,))
-        self.particles[:, 1] = np.random.normal(y, 1.0, (self.num_particles,))
-        self.particles[:, 2] = np.random.uniform(0, 2*np.pi, (self.num_particles,))
+        num_particles = self.particles.shape[0]
+        num_close = int(num_particles * 0.75)
+        self.particles[:num_close, 0] = np.random.normal(x, 1.0, (num_close,))
+        self.particles[:num_close, 1] = np.random.normal(y, 1.0, (num_close,))
+        self.particles[:num_close, 2] = np.random.uniform(0, 2*np.pi, (num_close,))
+        self.particles[num_close:, 0] = np.random.normal(x, 3.0, (self.num_particles-num_close,))
+        self.particles[num_close:, 1] = np.random.normal(y, 3.0, (self.num_particles-num_close,))
+        self.particles[num_close:, 2] = np.random.uniform(0, 2*np.pi, (self.num_particles-num_close,))
 
         self.get_logger().info("Generated particles centered at %f %f" % (x,y))
 
@@ -233,7 +238,11 @@ class ParticleFilter(Node):
         
         # retrieve probabilities corresponding to each particle
         probabilities = self.sensor_model.evaluate(self.particles, laser_linspaced)
+
+        # # linear probabilities
         normalized_probabilities = probabilities / np.sum(np.array(probabilities))
+        #quadratic probabilities
+        # normalized_probabilities = np.array(normalized_probabilities)**2 / np.sum(np.array(normalized_probabilities)**2)
 
         # resample particles from previous particles using probabilities (choice only takes in 1D array)
         indices_particles = np.linspace(0, self.particles.shape[0]-1, self.particles.shape[0])

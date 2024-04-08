@@ -147,6 +147,8 @@ class SensorModel:
         # Produces a matrix of size N x num_beams_per_particle
         scans = self.scan_sim.scan(particles) # computes the simulated laserScan for each particle
         
+        array_str = np.array2string(observation, separator=', ')
+        # self.node.get_logger().info("observation before: %s" % array_str)
         # convert from meters to pixels
         observation = observation / (self.map_metadata.resolution * self.lidar_scale_to_map_scale)
         scans = scans / (self.map_metadata.resolution * self.lidar_scale_to_map_scale)
@@ -160,16 +162,26 @@ class SensorModel:
 
         probabilities = np.zeros(scans.shape[0])
         
+        # self.node.get_logger().info("c1: %f" % (self.map_metadata.resolution * self.lidar_scale_to_map_scale))
+        # self.node.get_logger().info("c2: %f" % self.z_max)
+        # self.node.get_logger().info("c3: %f" % (self.table_width-1))
+        # array_str = np.array2string(observation, separator=', ')
+        # self.node.get_logger().info("observation after: %s" % array_str)
+        
+
+        
         # calculates p(z_k^i | x_k^j,aar readings for each particle's scan
         for scan_index, particle_scan in enumerate(scans):
             individual_lidar_probs= np.take(self.sensor_model_table, np.ravel_multi_index((observation.astype(int), particle_scan.astype(int)), self.sensor_model_table.shape))
             
             # find number of lidar beams with ranges that are greater than 20
-            number_big = np.where(observation>(self.map_metadata.resolution * self.lidar_scale_to_map_scale)*20, 1, 0).sum()
-            self.node.get_logger().info("Number of really far particles: %f" % number_big)
+            
+            number_big = np.where(observation>190, 1, 0).sum()
+            # self.node.get_logger().info("Number of really far particles: %f" % number_big)
             
             # multiplied individual_lidar_probs
-            probabilities[scan_index] = np.exp(np.log(individual_lidar_probs).sum())
+            # probabilities[scan_index] = np.exp(np.log(individual_lidar_probs).sum())
+            probabilities[scan_index] = np.exp((observation.shape[0]/(observation.shape[0]-number_big))*np.where(observation>190, 0, np.log(individual_lidar_probs)).sum())
 
         return probabilities
 
