@@ -160,9 +160,14 @@ class SensorModel:
 
         probabilities = np.zeros(scans.shape[0])
         
-        # calculates p(z_k^i | x_k^j, m) across all lidar readings for each particle's scan
+        # calculates p(z_k^i | x_k^j,aar readings for each particle's scan
         for scan_index, particle_scan in enumerate(scans):
             individual_lidar_probs= np.take(self.sensor_model_table, np.ravel_multi_index((observation.astype(int), particle_scan.astype(int)), self.sensor_model_table.shape))
+            
+            # find number of lidar beams with ranges that are greater than 20
+            number_big = np.where(observation>(self.map_metadata.resolution * self.lidar_scale_to_map_scale)*20, 1, 0).sum()
+            self.node.get_logger().info("Number of really far particles: %f" % number_big)
+            
             # multiplied individual_lidar_probs
             probabilities[scan_index] = np.exp(np.log(individual_lidar_probs).sum())
 

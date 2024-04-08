@@ -40,6 +40,10 @@ class ParticleFilter(Node):
         scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
         odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
 
+        # before any clicks, just generate the particle distribution at the origin
+        self.particles = np.zeros((self.num_particles, 3))
+        self.generate_random_particles(0,0)
+
         self.laser_sub = self.create_subscription(LaserScan, scan_topic,
                                                   self.laser_callback,
                                                   1)
@@ -60,7 +64,7 @@ class ParticleFilter(Node):
         self.update_particles_laser_freq = 1.0 # in hertz
         self.create_timer(1/self.update_particles_laser_freq, self.update_particles_laser)
 
-        self.update_viz_freq = 10.0 # in hertz
+        self.update_viz_freq = 1.0 # in hertz
         self.pose = [0.0, 0.0, 0.0]
         self.create_timer(1/self.update_viz_freq, self.update_viz)
 
@@ -86,9 +90,6 @@ class ParticleFilter(Node):
 
         self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
         self.pose_pub = self.create_publisher(PoseStamped, "/base_link_reorient", 1)
-        self.laser_pose_pub = self.create_publisher(PoseStamped, "laser", 1)
-
-        self.laserscan_reorient_pub = self.create_publisher(LaserScan, "/scan_reorient", 1)
 
         self.laserscan_array_pub = self.create_publisher(PoseArray, "/laserscan_array", 1)
 
@@ -108,10 +109,6 @@ class ParticleFilter(Node):
         # listen for clicked points - initialize gaussian distribution of particles whenever clicked
         self.clicked_point = (0, 0)
         self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
-                    
-        # before any clicks, just generate the particle distribution at the origin
-        self.particles = np.zeros((self.num_particles, 3))
-        self.generate_random_particles(0,0)
 
         self.get_logger().info("=============+READY+=============")
 
@@ -125,23 +122,15 @@ class ParticleFilter(Node):
         self.generate_random_particles(x,y)
     
     def generate_random_particles(self, x, y):
-        self.particles[:, 0] = np.random.normal(x, 3.0, (self.num_particles,))
-        self.particles[:, 1] = np.random.normal(y, 3.0, (self.num_particles,))
+        self.particles[:, 0] = np.random.normal(x, 1.0, (self.num_particles,))
+        self.particles[:, 1] = np.random.normal(y, 1.0, (self.num_particles,))
         self.particles[:, 2] = np.random.uniform(0, 2*np.pi, (self.num_particles,))
 
         self.get_logger().info("Generated particles centered at %f %f" % (x,y))
 
     def update_viz(self):
-        self.get_logger().info("Updating viz!")
+        # self.get_logger().info("Updating viz!")
         # if (self.particles_pub.get_subscription_count() == 0): return
-
-
-        #------------- Republish laser scan (from /scan) to /laserscan_array as a PoseArray
-
-        if (not self.laserScan == None):
-            self.laserscan_array_pub.publish(self.LaserScan_to_PoseArray())
-        # -------------
-
         
         #------------- Publish particle visualization as PoseArray to /particles_vis
         posearray = PoseArray()
@@ -169,6 +158,8 @@ class ParticleFilter(Node):
 
 
         # ------------- Publish pose guess as PoseStamped to /base_link_reorient
+        self.pose = np.array([np.mean(self.particles[:,0]), np.mean(self.particles[:,1]),  np.arctan2(np.mean(np.sin(self.particles[:,2])), np.mean(np.cos(self.particles[:,2])))])
+        
         pose_toPub = PoseStamped()
 
         pose_toPub.header.frame_id = "/map"
@@ -187,6 +178,12 @@ class ParticleFilter(Node):
         self.pose_pub.publish(pose_toPub)
         # ------------
 
+        
+        #------------- Republish laser scan (from /scan) to /laserscan_array as a PoseArray
+        # if (not self.laserScan == None):
+        #     self.laserscan_array_pub.publish(self.LaserScan_to_PoseArray())
+        # -------------
+
     # takes in param LaserScan and updates our own param
     def laser_callback(self, msg_laser):
         # https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/LaserScan.html
@@ -196,9 +193,13 @@ class ParticleFilter(Node):
         # this is terrible lmaooooooooooooooo
 
         posearray = PoseArray()
-        posearray.header.frame_id = "/base_link"
+        posearray.header.frame_id = "base_link"
         
         laserscan = self.laserScan
+
+        # ranges = np.array(self.laserScan.ranges)
+        # ranges = ranges[np.linspace(0, ranges.size-1, num=50, dtype = int)]
+
         ranges = laserscan.ranges
         angle_min = laserscan.angle_min
         angle_increment = laserscan.angle_increment
@@ -214,6 +215,12 @@ class ParticleFilter(Node):
 
             posearray.poses.append(pose)
         
+        # arrayOfPoses = []
+        # pose_ind = np.linspace(0, len(posearray.poses)-1, num=50, dtype = int)
+        # for i in pose_ind:
+        #     arrayOfPoses.append(posearray.poses[i])
+        
+        # posearray.poses = arrayOfPoses
         return posearray
     
     def update_particles_laser(self):
@@ -238,7 +245,7 @@ class ParticleFilter(Node):
             new_particles[i] = self.particles[int(chosen_index)]
         self.particles = new_particles
 
-        self.updatePoseGuess()        
+        # self.updatePoseGuess()        
 
     # takes in param Odometry
     def odom_callback(self, odom):
@@ -254,7 +261,6 @@ class ParticleFilter(Node):
 
     def update_particles_odom(self):
         if (self.laserScan == None): return # break out of function if no laser scans received yet
-
         twist_x = self.twist_x / self.update_particles_odom_freq
         twist_y = self.twist_y / self.update_particles_odom_freq
         twist_theta = self.twist_theta / self.update_particles_odom_freq
@@ -262,22 +268,13 @@ class ParticleFilter(Node):
         # self.get_logger().info("Odom: %f %f %f" % (twist_x, twist_y, twist_theta))
         self.particles = self.motion_model.evaluate(self.particles, np.array([twist_x, twist_y, twist_theta]))
 
-        self.updatePoseGuess()        
+        # self.updatePoseGuess()        
 
     def updatePoseGuess(self):
-        return
-        # set pose to average of particles    
-        # self.get_logger().info("Updating pose guess...")
-
+        if (len(self.particles) < 1): return
+        # set pose to average of particles
         # README HAS A COMMENT ABOUT A BETTER WAY TO FIND AVERAGES... especially if position has many modes in distribution
-        # self.pose = np.array([np.mean(self.particles[0]), np.mean(self.particles[1]),  np.arctan2(np.mean(np.sin(self.particles[2])), np.mean(np.cos(self.particles[2])))])
-
-        #laser_pose_toPub = PoseStamped()
-        #laser_pose_toPub.header.frame_id = "/map"
-        #laser_pose_toPub.pose.position.x = 0.0
-        #laser_pose_toPub.pose.position.y = 0.0
-        #laser_pose_toPub.pose.position.z = 0.0
-        #self.laser_pose_pub.publish(pose_toPub)
+        self.pose = np.array([np.mean(self.particles[:,0]), np.mean(self.particles[:,1]),  np.arctan2(np.mean(np.sin(self.particles[:,2])), np.mean(np.cos(self.particles[:,2])))])
 
     # takes in param PoseWithCovarianceStamped
     # override callback to set pose manually
